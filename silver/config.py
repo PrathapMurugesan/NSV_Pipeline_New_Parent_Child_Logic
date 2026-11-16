@@ -32,7 +32,7 @@ PARENT_BLOCK_BY_LEVEL = {'child_10m': 1000, 'child_100m': 1000, 'parent': 1000}
 
 # display_defect_id (DLM notebook post-process): output tables whose rows get a top-level id, and child → parent
 DISPLAY_ID_BASE_TABLES = ['master_roughness_parent', 'master_rutting_parent', 'master_cracking_parent',
-                          'master_ravelling_parent', 'master_pothole']
+                          'master_pothole']
 DISPLAY_ID_CHILD_PARENT = {
     'master_cracking_child_100m': 'master_cracking_parent',
     'master_cracking': 'master_cracking_parent',
@@ -40,8 +40,6 @@ DISPLAY_ID_CHILD_PARENT = {
     'master_roughness_child_10m': 'master_roughness_parent',
     'master_rutting_child_100m': 'master_rutting_parent',
     'master_rutting_child_10m': 'master_rutting_parent',
-    'master_ravelling_child_100m': 'master_ravelling_parent',
-    'master_ravelling_child_10m': 'master_ravelling_parent',
 }
 
 # ── Fixed values ─────────────────────────────────────────────────────────────
@@ -58,6 +56,17 @@ with open(DEFECT_RULES_PATH, encoding='utf-8') as _f:
 # breach_flag and road_condition NULL, calculated severity / ratings NULL, and the DQ 'threshold' check FAILs.
 THRESHOLD_DEFECTS = ['roughness', 'rutting', 'cracking', 'ravelling']
 
+# ── IRC only (CA is unchanged: D2 only, no defaults) ─────────────────────────
+#   Standard IRC breach thresholds (D-3 SOP colour code; the Poor threshold = breach). Used when D2 gives NO IRC
+#   threshold for the defect — a D2 IRC threshold always has priority. Same value for Bituminous (D1 'Asphalt')
+#   and Cement Concrete (cracking 30 % is applied to CC as well). Breach = value > threshold (unless D2 gives the
+#   operator for its own IRC threshold).
+IRC_STANDARD_THRESHOLDS = {'roughness': 2400.0,      # mm/km (BI)
+                           'rutting': 10.0,          # mm
+                           'cracking': 30.0}         # % lane area
+IRC_DEFAULT_OPERATOR = '>'
+PAVEMENT_ALIASES = {'asphalt': 'Bituminous'}          # D1 'Asphalt' = Bituminous
+
 # PCI weights (sum = 1.0). Roughness input = IRI (m/km). Blank inputs are not counted: only 10 m slots
 # with at least one real value get a PCI; 100 m / 1 km PCI = mean of those 10 m PCI values.
 PCI_WEIGHTS = {'cracking_pct': 0.12, 'ravelling_area': 0.10, 'pothole_area': 0.16,
@@ -65,6 +74,59 @@ PCI_WEIGHTS = {'cracking_pct': 0.12, 'ravelling_area': 0.10, 'pothole_area': 0.1
 
 LANE_TO_DIRECTION = {**{f'L{i}': 'Increasing' for i in range(1, 9)},
                      **{f'R{i}': 'Decreasing' for i in range(1, 9)}}
+
+# ── master_chainage ──────────────────────────────────────────────────────────
+#   Lanes that ALWAYS get their own <lane>_start_chainage / _end_chainage / _start_lat / _start_long / _end_lat /
+#   _end_long columns (NULL when the lane is not in D4). Any other lane that has data in D4 (L3, L4, R3 …) gets
+#   the same 6 columns added automatically, in lane order (as the DLM notebook).
+MASTER_CHAINAGE_LANES = ['L1', 'L2', 'R1', 'R2']
+#   How lhs_* / rhs_* start/end lat-long are taken from the side's lanes in each 10 m row:
+#     'lane_extent'→ as the DLM notebook: start lat/long of the lane with the lowest start chainage,
+#                    end lat/long of the lane with the highest end chainage (tie → lowest lane number) (current choice)
+#     'min_max'    → each coordinate on its own: MIN of the lanes' start lat / start long,
+#                    MAX of the lanes' end lat / end long   (older meeting rule)
+MASTER_CHAINAGE_SIDE_GPS = 'lane_extent'
+
+# ── DLM LHS / RHS hierarchy tables (new DLM table names) ─────────────────────
+#   parent (one row per side per 1 km) → its child tables. display_defect_id: parent breach rows D/{ddmmyy}/N/{%05d},
+#   child breach rows {parent id}/{%04d}; a child breach row whose parent has no id gets its own D/{ddmmyy}/N/{%05d}.
+#   Keys = table modules in tables/ (new_master_pothole writes the table 'master_pothole' — the NSV lane-wise
+#   master_pothole keeps its name in dlm_kpi). Order = DLM numbering order (parents of every defect first).
+#   All of these tables are written to <UPC>/dlm_kpi_new (as the DLM notebook's dlm_kpi_new schema).
+HIERARCHY_TABLES = {
+    'master_roughness': ['child_roughness_as_per_ca', 'child_10m_roughness', 'child_100m_roughness'],
+    'master_rutting': ['child_rutting_as_per_ca', 'child_10m_rutting', 'child_100m_rutting'],
+    'master_cracking_ca': ['master_cracking_irc', 'child_10m_cracking'],
+    'new_master_pothole': [],              # one row per pothole, no child table
+}
+#   Cracking (silver table list): master_cracking_ca = parent, CA, 100 m; master_cracking_irc = child, IRC, 100 m;
+#   child_10m_cracking = child, CA + IRC, 10 m. Parent row per 'side' (LHS / RHS, value = average of the side's
+#   lanes, as master_roughness) or per 'lane' (the lane's own 100 m CA row).
+CRACKING_PARENT_M = 100
+CRACKING_PARENT_BY = 'side'
+#   Side parents whose column list also has the 8 CA / IRC columns of the 10 m table (written as NULL)
+PARENT_EXTRA_COLUMNS = ['rutting']
+HIERARCHY_FOLDER = 'dlm_kpi_new'
+
+# ── The ONLY tables written (all to <UPC>/dlm_kpi_new). Every other table (NSV 10 m / 100 m / 1 km, NSV potholes,
+#    thresholds, intervals) is still built in memory as the source of these and for the DQ / rule checks, but is
+#    not written. Keys = table modules in tables/ (new_master_pothole writes 'master_pothole').
+OUTPUT_TABLES = [
+    'master_roughness', 'child_roughness_as_per_ca', 'child_10m_roughness', 'child_100m_roughness',
+    'master_rutting', 'child_rutting_as_per_ca', 'child_10m_rutting', 'child_100m_rutting',
+    'master_cracking_ca', 'master_cracking_irc', 'child_10m_cracking',
+    'new_master_pothole',
+    'master_chainage',
+]
+#   child_<defect>_as_per_ca is built at the D2 CA reporting interval ONLY ('Comparison as per CA':
+#   'Current Cycle | <defect> | Reporting Interval', else 'Overall Reporting Interval'). The IRC sheet is never used
+#   in place of CA (and CA never in place of IRC). No CA interval → this default + DQ gate FAIL.
+#   Set to None to leave the table empty instead.
+CHILD_AS_PER_CA_DEFAULT_M = 100
+#   child_roughness_as_per_ca (CA only): the block's average lane IRI is rounded to this many decimals BEFORE
+#   BI = 630 × IRI^1.12 — the D2 'Comparison as per CA' sheet does the same (its BI = 630 × round(IRI, 2)^1.12).
+#   IRC tables are not rounded. None = no rounding.
+CA_IRI_DECIMALS = 2
 
 # ── Source order for point/area defects (first source that HAS data is used) ──
 #   'defect_report' = D4 defect report 10 m columns
@@ -101,8 +163,7 @@ CRACK_IMAGE_TOLERANCE_M = 5.0
 #   breach_flag = 0 when the pothole's SEVERITY starts with one of these words (case-insensitive), else 1.
 #   Only the severity column is used (not type of defect). Blank severity → 1 (a recorded pothole).
 #   road_condition comes ONLY from breach_flag: 1 → POTHOLE_ROAD_CONDITION[1], 0 → POTHOLE_ROAD_CONDITION[0].
-#   Same set as the DLM notebook (POTHOLE_NON_BREACH_SEVERITIES: low, delamination, very low, none).
-POTHOLE_NO_BREACH_SEVERITY = ['low', 'delamination', 'very low', 'none']
+POTHOLE_NO_BREACH_SEVERITY = ['low', 'delamination']
 POTHOLE_ROAD_CONDITION = {1: 'Bad', 0: 'Good'}
 
 # ── DQ checks against D2 ─────────────────────────────────────────────────────
@@ -111,9 +172,6 @@ DQ_TOLERANCE      = 0.01    # |D2 − silver| allowed for rut depth (mm), BI (mm
 # per-defect tolerance where D2 rounds: roughness BI is in mm/km (1,000–5,000), so 1 mm/km (< 0.1 %) forgives
 # D2's rounding to whole numbers but still reports a real difference; every other defect uses DQ_TOLERANCE
 DQ_TOLERANCE_BY_DEFECT = {'roughness': 1.0}
-# True = the tolerance is at least one unit of the last decimal D2 shows in that column (D2 rut depth with 1 decimal
-# → 0.1 mm), because D2 rounds its block values. Measured per UPC and column, so every vendor's rounding is covered.
-DQ_TOLERANCE_D2_PRECISION = True
 DQ_AREA_TOLERANCE = 0.01    # sq m, pothole area per lane per 100 m
 DQ_POTHOLE_EXCLUDE_SEVERITY = ['delamination']   # D2 pothole rows not counted as potholes
 
@@ -146,9 +204,9 @@ CONDITION_SEVERITY_ORDER = ['very poor', 'poor', 'fair', 'good', 'very good']   
 
 # ── dlm_threshold_mapping.deliverable_path ───────────────────────────────────
 # S3 root of the bronze NSV output. deliverable_path = <root>/zone=<z>/phase=<p>/cycle=<c>/<UPC>
-# (e.g. s3://dhms-new-stgae/nsv_extraction_new/bronze/nsv/zone=A/phase=2/cycle=1/N-02007-11001-HR).
+# (e.g. s3://dhms-new-stgae/nsv-extraction/bronze/nsv/zone=A/phase=2/cycle=1/N-02007-11001-HR).
 # Set to None to write the project folder the run read instead.
-BRONZE_S3_ROOT = _os.environ.get('NSV_BRONZE_S3_ROOT', 's3://dhms-new-stgae/nsv_extraction_new/bronze/nsv')   # run_silver_s3.sh sets it
+BRONZE_S3_ROOT = 's3://dhms-new-stgae/nsv-extraction/bronze/nsv'
 # S3 location of the silver output (for reference). The code writes to OUTPUT_ROOT on the local / mounted disk;
 # that folder is what goes to this S3 prefix (same zone=/phase=/cycle=/<UPC> layout).
 SILVER_S3_ROOT = 's3://dhms-new-stgae/nsv-silver'

@@ -140,7 +140,7 @@ def _cracking_from_nsv_cracks(prj):
     img, dt, nh = pick(c, 'image'), pick(c, 'datetime'), pick(c, 'nh')
     out = pd.DataFrame({
         'lane': clean_text(d[pick(c, 'lane')]).str.upper(),
-        'start': np.minimum(st, en), 'end': np.maximum(st, en),
+        'start': np.minimum(st, en), 'end': np.minimum(st, en) + 10,      # end = start + 10 (decided rule)
         'crack_pct': pct,                                            # 'Crack Area | Total' is % of lane (max 100)
         'crack_sqm': pct * config.LANE_AREA_SQM / 100.0,             # % → sq m of the 35 sq m lane
         'start_lat': num(d[lat0]) if lat0 else np.nan, 'start_long': num(d[lon0]) if lon0 else np.nan,
@@ -149,7 +149,9 @@ def _cracking_from_nsv_cracks(prj):
         'image_name': clean_text(d[img]) if img else None,
         'datetime': pd.to_datetime(d[dt], errors='coerce') if dt else prj.run_ts,
         'source': 'nsv_cracks'})
-    out = out.dropna(subset=['start', 'crack_pct']).reset_index(drop=True)
+    # only rows without a chainage are left out (they cannot be placed); a blank crack % stays as a row
+    # with a NULL value, like the defect-report rows (never dropped because a value or threshold is blank)
+    out = out.dropna(subset=['start']).reset_index(drop=True)
     out[['start', 'end']] = out[['start', 'end']].round().astype('int64')
     return out.sort_values(['lane', 'start'], kind='mergesort').reset_index(drop=True)
 

@@ -26,18 +26,27 @@ import config
 from common.output import parse_args, make_project
 from tables import (master_rutting_child_10m, master_rutting_child_100m, master_rutting_parent,
                     master_roughness_child_10m, master_roughness_child_100m, master_roughness_parent,
-                    master_ravelling_child_10m, master_ravelling_child_100m, master_ravelling_parent,
                     master_cracking, master_cracking_child_100m, master_cracking_parent,
-                    master_pothole, master_chainage, master_reporting_interval, dlm_threshold_mapping)
+                    master_pothole, master_chainage, master_reporting_interval, dlm_threshold_mapping,
+                    # DLM LHS / RHS hierarchy tables (written to dlm_kpi_new)
+                    master_roughness, child_roughness_as_per_ca, child_10m_roughness, child_100m_roughness,
+                    master_rutting, child_rutting_as_per_ca, child_10m_rutting, child_100m_rutting,
+                    master_cracking_ca, master_cracking_irc, child_10m_cracking,
+                    new_master_pothole)
 from validation import dq_checks, rule_checks
 
 # Order: 10 m → 100 m → 1 km per defect, then cracking, potholes, chainage spine.
 PIPELINE = [
     master_rutting_child_10m, master_rutting_child_100m, master_rutting_parent,
+    master_rutting, child_rutting_as_per_ca, child_10m_rutting, child_100m_rutting,   # DLM hierarchy (dlm_kpi_new)
     master_roughness_child_10m, master_roughness_child_100m, master_roughness_parent,
-    master_ravelling_child_10m, master_ravelling_child_100m, master_ravelling_parent,
+    # DLM LHS / RHS hierarchy (new DLM table names), built from the finished master_roughness_* tables
+    master_roughness, child_roughness_as_per_ca, child_10m_roughness, child_100m_roughness,
+    # ravelling: no tables (D2 has no ravelling threshold); ravelling still counts in PCI (D4 ravelling sq m)
     master_cracking, master_cracking_child_100m, master_cracking_parent,
+    master_cracking_ca, master_cracking_irc, child_10m_cracking,   # cracking silver tables (dlm_kpi_new)
     master_pothole,
+    new_master_pothole,                                  # DLM master_pothole: one row per pothole (dlm_kpi_new)
     master_chainage,
     master_reporting_interval,
     dlm_threshold_mapping,
@@ -98,8 +107,10 @@ def run_project(args, steps, project_dir=None):
         results = {}
         for mod in steps:
             try:
-                df = mod.run(prj)
-                results[mod.TABLE] = df
+                key = getattr(mod, 'KEY', mod.TABLE)
+                # only config.OUTPUT_TABLES are written (to dlm_kpi_new); the others are built in memory only
+                df = mod.run(prj, write=key in config.OUTPUT_TABLES)
+                results[key] = df
                 report.append({'upc': prj.upc, 'table': mod.TABLE, 'status': 'ok' if len(df) else 'empty',
                                'rows': len(df), 'breach': int(df['breach_flag'].sum()) if 'breach_flag' in df else None,
                                'error': ''})
@@ -109,17 +120,17 @@ def run_project(args, steps, project_dir=None):
                 report.append({'upc': prj.upc, 'table': mod.TABLE, 'status': 'FAILED', 'rows': 0, 'breach': None,
                                'error': f"{type(e).__name__}: {e}"})
 
-        # display_defect_id: hierarchical ids over all tables of the UPC (DLM notebook post-process)
+        # display_defect_id of the DLM LHS / RHS hierarchy tables (parent → children, own counter)
         try:
-            from common.display_ids import assign_display_ids
+            from common.hierarchy import assign_hierarchy_display_ids, table_name
             from common.output import write_table
-            for t, df in assign_display_ids(prj, results).items():
-                write_table(df, t, prj)
-                if t in results:
-                    results[t] = df
+            for k, df in assign_hierarchy_display_ids(prj, results).items():
+                if k in config.OUTPUT_TABLES:
+                    write_table(df, table_name(k), prj, folder=config.HIERARCHY_FOLDER)
+                results[k] = df
         except Exception as e:
             traceback.print_exc(file=sys.stdout)
-            report.append({'upc': prj.upc, 'table': '(display_defect_id)', 'status': 'FAILED', 'rows': 0,
+            report.append({'upc': prj.upc, 'table': '(hierarchy display_defect_id)', 'status': 'FAILED', 'rows': 0,
                            'breach': None, 'error': f"{type(e).__name__}: {e}"})
 
         print("\nSources used:")
@@ -160,9 +171,10 @@ def main():
     args = parse_args(extra)
 
     wanted = {t.strip() for t in args.tables.split(',')} if args.tables else None
-    steps = [m for m in PIPELINE if not wanted or m.TABLE in wanted]
+    key = lambda m: getattr(m, 'KEY', m.TABLE)            # --tables takes keys (new_master_pothole for the DLM one)
+    steps = [m for m in PIPELINE if not wanted or key(m) in wanted]
     if wanted and len(steps) != len(wanted):
-        sys.exit(f"Unknown table(s): {', '.join(sorted(wanted - {m.TABLE for m in PIPELINE}))}")
+        sys.exit(f"Unknown table(s): {', '.join(sorted(wanted - {key(m) for m in PIPELINE}))}")
 
     projects = find_projects(args.root, args.upc) if args.root else [None]
     if args.root:

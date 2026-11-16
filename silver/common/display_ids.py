@@ -29,14 +29,15 @@ _ORDER = ['threshold_name', 'lane', 'start_chainage', 'end_chainage', 'record_id
 _CHILD_ORDER = ['start_chainage', 'end_chainage', 'record_id', 'id']
 
 
-def _max_counter_other_upcs(prj, date_str):
+def _max_counter_other_upcs(prj, date_str, tables=None, folder='dlm_kpi'):
     """Highest top-level counter D/{date}/[NDRO]/<n> used by other UPCs in the output folder (0 if none)."""
     top = re.compile(rf'^D/{re.escape(date_str)}/[NDRO]/(\d+)$')
-    tables = list(config.DISPLAY_ID_BASE_TABLES) + list(config.DISPLAY_ID_CHILD_PARENT)
+    if tables is None:
+        tables = list(config.DISPLAY_ID_BASE_TABLES) + list(config.DISPLAY_ID_CHILD_PARENT)
     own = os.path.normpath(prj.out_dir)
     best = 0
     for t in tables:
-        for f in glob.glob(os.path.join(prj.output_root, '**', 'dlm_kpi', f'{t}.parquet'), recursive=True):
+        for f in glob.glob(os.path.join(prj.output_root, '**', folder, f'{t}.parquet'), recursive=True):
             if os.path.normpath(f).startswith(own + os.sep):
                 continue
             try:

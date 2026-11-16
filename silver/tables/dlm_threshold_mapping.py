@@ -1,6 +1,6 @@
 """
 dlm_threshold_mapping
-  One row per defect (roughness, cracking, rutting, ravelling, pothole) of the UPC: the thresholds, IRC bands,
+  One row per defect (roughness, cracking, rutting, pothole) of the UPC: the thresholds, IRC bands,
   visual-condition labels, reporting intervals and road facts the silver tables were built with.
 
   ca_threshold / irc_threshold     D2 only (Inputs (Thresholds) json → header json → limit column); no defaults,
@@ -37,7 +37,7 @@ from common.defects import band_limits, ranges_for, _fmt
 from common.output import run_table, standalone
 
 TABLE = 'dlm_threshold_mapping'
-DEFECTS = ['roughness', 'cracking', 'rutting', 'ravelling', 'pothole']
+DEFECTS = ['roughness', 'cracking', 'rutting', 'pothole']      # ravelling: no tables (no D2 threshold)
 UNIT = {'roughness': 'mm/km', 'cracking': '% area', 'rutting': 'mm', 'ravelling': '% area', 'pothole': 'sq m'}
 VC_FIELD = {'roughness': 'vc_rough', 'rutting': 'vc_rut', 'cracking': 'vc_crack', 'ravelling': 'vc_rav',
             'pothole': 'vc_pot'}

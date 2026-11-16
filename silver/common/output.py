@@ -64,12 +64,13 @@ def _write_excel(df, path, engine, sheet):
             ws.autofilter(0, 0, max(len(df), 1), len(df.columns) - 1)
 
 
-def write_table(df, table, prj, breach_copy=True):
-    """Returns (rows_kpi, rows_postgres)."""
-    kpi = os.path.join(prj.out_dir, 'dlm_kpi')
+def write_table(df, table, prj, breach_copy=True, folder='dlm_kpi'):
+    """Returns (rows_kpi, rows_postgres). folder 'dlm_kpi' (default) also writes the breach rows to dlm_postgres;
+    any other folder (e.g. 'dlm_kpi_new' for the DLM LHS / RHS hierarchy) gets all rows only."""
+    kpi = os.path.join(prj.out_dir, folder)
     _write_one(df, kpi, table)
     n_pg = None
-    if breach_copy and 'breach_flag' in df.columns:
+    if folder == 'dlm_kpi' and breach_copy and 'breach_flag' in df.columns:
         pg = df[df['breach_flag'] == 1]
         _write_one(pg, os.path.join(prj.out_dir, 'dlm_postgres'), table)
         n_pg = len(pg)
@@ -91,20 +92,33 @@ def summarize(table, df):
     return msg
 
 
-def run_table(table, build_fn, prj, write=True, apply_finalize=True, breach_copy=True):
+def run_table(table, build_fn, prj, write=True, apply_finalize=True, breach_copy=True, folder='dlm_kpi', key=None):
+    """key = name this table is known by inside the run (default: table); needed when two tables share a name
+    in different folders (e.g. NSV master_pothole in dlm_kpi and the DLM LHS / RHS master_pothole in dlm_kpi_new)."""
     t0 = time.time()
-    print(f"\n▶ {table}")
+    print(f"\n▶ {table}" + (f"  ({folder})" if folder != 'dlm_kpi' else ''))
     from common.finalize import finalize
     df = build_fn(prj)
     if apply_finalize:
         df = finalize(df, table, prj)
+    prj.__dict__.setdefault('_built_tables', {})[key or table] = df       # reused by tables built from this one
     print(f"  {summarize(table, df)}")
     if write and not df.empty:
-        write_table(df, table, prj, breach_copy=breach_copy)
+        write_table(df, table, prj, breach_copy=breach_copy, folder=folder)
         print(f"  written ({time.time() - t0:.0f}s)")
     elif df.empty:
         print("  nothing to write")
     return df
+
+
+def built_table(prj, key):
+    """Finished DataFrame of another table of this run, by its key (= module name in tables/);
+    built now, without writing, if not built yet."""
+    cache = prj.__dict__.setdefault('_built_tables', {})
+    if key not in cache:
+        import importlib
+        importlib.import_module(f'tables.{key}').run(prj, write=False)
+    return cache[key]
 
 
 def standalone(run_fn):

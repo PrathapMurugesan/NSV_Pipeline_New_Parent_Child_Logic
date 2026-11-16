@@ -85,7 +85,6 @@ def vc_label(s):
 def d4_to_long(raw):
     cols = list(raw.columns)
     start_c = pick(cols, 'chainage', 'start')
-    end_c = pick(cols, 'chainage', 'end')
     nh_c = pick(cols, 'nh', 'number')
 
     lane_cols = {}
@@ -104,11 +103,8 @@ def d4_to_long(raw):
                 lane_cols.setdefault(m.group(1).upper(), {})[f] = c
 
     start = parse_chainage(raw[start_c])
-    end = parse_chainage(raw[end_c]) if end_c else start + 10
-    no_end = end.isna() & start.notna()
-    if no_end.any():                         # blank / unreadable end chainage → start + 10 (D4 is 10 m), never a crash
-        print(f"  WARNING: D4 end chainage blank on {int(no_end.sum()):,} row(s) → start + 10 used")
-        end = end.where(~no_end, start + 10)
+    # end chainage = start + 10 on every row (decided rule; D4 'Chainage | End' is not used)
+    end = start + 10
     frames = []
     n_vc_num = 0
     for lane, fmap in sorted(lane_cols.items()):
@@ -423,7 +419,16 @@ def resolve_thresholds(prj):
             src[(std, 'roughness')] = f"{src.get((std, 'roughness'), 'D2')} (IRI {v:g} m/km → BI)"
             units[(std, 'roughness')] = 'mm/km'
 
-    # 4) NO defaults: a defect + standard with no D2 threshold stays None (DQ 'threshold' check flags it)
+    # 4) IRC only: no D2 IRC threshold → standard IRC threshold (D-3 SOP, config.IRC_STANDARD_THRESHOLDS).
+    #    IRC breach operator = '>' unless D2 gives the operator of its own IRC threshold.
+    for d in DEFECTS:
+        if thr['irc'][d] is None and d in config.IRC_STANDARD_THRESHOLDS:
+            thr['irc'][d] = float(config.IRC_STANDARD_THRESHOLDS[d])
+            src[('irc', d)] = 'IRC standard (D-3 SOP) — not in D2'
+            ops[('irc', d)] = config.IRC_DEFAULT_OPERATOR
+        if thr['irc'][d] is not None and ('irc', d) not in ops:
+            ops[('irc', d)] = config.IRC_DEFAULT_OPERATOR
+    # 5) CA: NO defaults — a defect with no D2 CA threshold stays None (DQ 'threshold' check flags it)
     for std in ['ca', 'irc']:
         for d in DEFECTS:
             if thr[std][d] is None:
@@ -712,14 +717,43 @@ class Project:
     D2_INTERVAL_WORDS = {'roughness': ('roughness',), 'rutting': ('rut',), 'cracking': ('crack',),
                          'ravelling': ('ravel',)}
 
+    def d2_blocks(self, std, defect):
+        """Every row of the D2 sheet ('Comparison as per CA' / 'as per IRC') as a block with ITS OWN reporting interval:
+           DataFrame start, end, interval_m, interval_source. interval = the row's 'Current Cycle | <defect> |
+           Reporting Interval', else the row's 'Overall Reporting Interval' (never the other standard's sheet), else
+           end − start. Rows without a start or end chainage are left out. Empty when there is no sheet."""
+        d2 = self.d2_irc if str(std).upper() == 'IRC' else self.d2_ca
+        if d2 is None or d2.empty:
+            return pd.DataFrame(columns=['start', 'end', 'interval_m', 'interval_source'])
+        cols = list(d2.columns)
+        sc, ec = pick(cols, 'chainage', 'start'), pick(cols, 'chainage', 'end')
+        dcol = ocol = None
+        for c in cols:
+            n = norm_name(c)
+            if 'previous' in n or 'reporting interval' not in n:
+                continue
+            if 'overall reporting interval' in n:
+                ocol = ocol or c
+            elif ('current cycle' in n and defect in self.D2_INTERVAL_WORDS
+                  and all(w in n for w in self.D2_INTERVAL_WORDS[defect])):
+                dcol = dcol or c
+        b = pd.DataFrame({'start': num(d2[sc]) if sc else np.nan, 'end': num(d2[ec]) if ec else np.nan})
+        di = num(d2[dcol]) if dcol else pd.Series(np.nan, index=d2.index)
+        oi = num(d2[ocol]) if ocol else pd.Series(np.nan, index=d2.index)
+        b['interval_m'] = di.where(di.notna(), oi).where(lambda s: s.notna(), b['end'] - b['start'])
+        b['interval_source'] = np.where(di.notna(), f'D2 {std.upper()} {defect} interval',
+                                        np.where(oi.notna(), f'D2 {std.upper()} Overall Reporting Interval',
+                                                 'D2 row length (end − start)'))
+        b = b.dropna(subset=['start', 'end'])
+        b = b[b['end'] > b['start']].sort_values('start').drop_duplicates('start').reset_index(drop=True)
+        return b
+
     def d2_interval(self, std, defect):
         """Reporting interval (m) from D2, CURRENT CYCLE only — the one place every interval comes from:
            sheet 'Comparison as per CA' (std CA) or 'as per IRC' (std IRC), column
            'Current Cycle | <defect> … | Reporting Interval' (defect 'overall': 'Overall Reporting Interval');
-           the most common value of the column (D2's last, shorter block is ignored).
-           No sheet / column / value → the interval of the defect in D2 'Inputs (Thresholds)' (same D2 file;
-           e.g. the CA comparison sheet was not delivered or not extracted), else None.
-           The tracker interval is never used."""
+           the most common value of the column (D2's last, shorter block is ignored). No sheet / column / value
+           → None. The tracker interval is never used."""
         key = (str(std).upper(), defect)
         cache = self.__dict__.setdefault('_d2_interval_cache', {})
         if key in cache:
@@ -738,9 +772,6 @@ class Project:
                     v = num(d2[c]).dropna()
                     out = float(v.mode().iloc[0]) if len(v) else None
                     break
-        if out is None and defect != 'overall':
-            fallback = self._thr_info['intervals'].get((key[0].lower(), defect))
-            out = float(fallback) if fallback else None
         cache[key] = out
         return out
 

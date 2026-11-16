@@ -91,47 +91,6 @@ def _silver_bins(prj, tables, defect, std, lane, g, table=None):
             .groupby('ch').agg(silver=(col, 'first'), silver_breach=('breach_flag', 'first')))
 
 
-def _d2_interval(ri):
-    """D2 reporting interval (m) of a block of rows: most common value of its interval column, 100 when none."""
-    return int(round(float(ri.mode().iloc[0]))) if len(ri) else 100
-
-
-def _decimals(values):
-    """Decimals D2 shows for a column (0-4): the fewest k with every value == round(value, k)."""
-    v = num(pd.Series(values)).dropna().to_numpy(dtype=float)
-    for k in range(5):
-        if np.allclose(v, np.round(v, k), rtol=0, atol=1e-9):
-            return k
-    return 4
-
-
-def _tolerance(defect, d2_values):
-    """|D2 − silver| allowed: the configured tolerance, or one unit of D2's last shown decimal when that is larger
-    (config.DQ_TOLERANCE_D2_PRECISION). D2 rounds its 100 m values (rut depth 3.2 for silver 3.15); one full unit,
-    not half, because D2 rounds values it averaged from already rounded 10 m values."""
-    tol = config.DQ_TOLERANCE_BY_DEFECT.get(defect, config.DQ_TOLERANCE)
-    if getattr(config, 'DQ_TOLERANCE_D2_PRECISION', False):
-        tol = max(tol, 10.0 ** -_decimals(d2_values))
-    return tol + 1e-9                         # 3.2 − 3.1 is 0.10000000000000009 in floating point
-
-
-def _bi_to_iri(bi):
-    """Inverse of BI = 630 × IRI^1.12 (common/segments.py)."""
-    return (num(bi).clip(lower=0) / 630.0) ** (1 / 1.12)
-
-
-def _roughness_iri_ok(d2_bi, silver_bi):
-    """D2 builds BI from an IRI it rounded first (D2 BI 881.6869 = 630 × 1.35^1.12). Its BI values then turn back
-    into IRI values with few decimals, and the right comparison is in IRI, within one unit of that decimal
-    (silver IRI 1.348 vs D2 1.35). When D2's BI does not come from a rounded IRI (≥ 4 decimals back), nothing
-    extra passes here and the BI tolerance alone decides."""
-    d2_iri, sv_iri = _bi_to_iri(d2_bi), _bi_to_iri(silver_bi)
-    k = _decimals(d2_iri)
-    if k > 3:
-        return pd.Series(False, index=d2_bi.index)
-    return ((d2_iri - sv_iri).abs() <= 10.0 ** -k + 1e-9).fillna(False)
-
-
 def _row(check, std, defect, lane, level, total, matched, skipped, note=''):
     pct = round(100.0 * matched / total, 1) if total else None
     return {'upc': None, 'check': check, 'std': std, 'defect': defect, 'lane': lane, 'level': level,
@@ -140,30 +99,17 @@ def _row(check, std, defect, lane, level, total, matched, skipped, note=''):
                                        'FAIL' if pct is not None else 'NO DATA'), 'note': note}
 
 
-def _crack_checks(prj, tables, summary, mism, std, lane, ref, skipped, gi=100):
-    """D2 cracking % (blocks of gi m) vs the three cracking tables (see CRACK_CHECKS).
-    gi = D2's interval: the 10 m rows are averaged per gi m block; a 100 m / 1 km table is compared with the
-    average of the D2 blocks inside it (only when the D2 blocks fit in it exactly)."""
-    tol = _tolerance('cracking', ref['d2'])
+def _crack_checks(prj, tables, summary, mism, std, lane, ref, skipped):
+    """D2 100 m cracking % vs the three cracking tables (see CRACK_CHECKS); + CA breach flag vs the 100 m table."""
+    tol = config.DQ_TOLERANCE_BY_DEFECT.get('cracking', config.DQ_TOLERANCE)
     for table, g, level in CRACK_CHECKS:
-        if table == 'master_cracking':        # 10 m rows can be averaged to any D2 interval
-            g, level = gi, f'{gi} m (10 m avg)'
         if table not in tables:
             summary.append({**_row('value', std, 'cracking', lane, level, 0, 0, skipped),
                             'd2_rows': len(ref), 'status': 'NOT RUN', 'note': f'{table} not in this run'})
             continue
-        if g % gi:                            # e.g. D2 200 m blocks vs the 100 m table: not comparable
-            summary.append({**_row('value', std, 'cracking', lane, level, 0, 0, skipped),
-                            'd2_rows': len(ref), 'status': 'NOT RUN',
-                            'note': f'D2 interval {gi} m does not fit in {table} blocks of {g} m'})
-            continue
         r = ref.assign(bin=(ref['ch'] // g * g).astype('int64'))
-        if g > gi:                            # D2 has no block this size: average of its blocks inside it,
-            # weighted by each block's length (first / last block of a road is shorter, e.g. 50 m or 11 m)
-            w = r['len'].where(r['len'] > 0, gi) if 'len' in r else pd.Series(float(gi), index=r.index)
-            r = (r.assign(_w=w, _wd=r['d2'] * w).groupby('bin', as_index=False)
-                 .agg(_wd=('_wd', 'sum'), _w=('_w', 'sum')))
-            r['d2'] = r['_wd'] / r['_w']
+        if g == 1000:                         # D2 has no 1 km cracking: average of its 100 m values in the km
+            r = r.groupby('bin', as_index=False)['d2'].mean()
         j = r.join(_silver_bins(prj, tables, 'cracking', std, lane, g, table), on='bin', how='left')
         ok = (j['d2'] - num(j['silver'])).abs() <= tol
         summary.append(_row('value', std, 'cracking', lane, level, len(j), int(ok.sum()), skipped, note=table))
@@ -200,62 +146,33 @@ def _failing_lanes_checks(prj, tables, summary, mism):
                 summary.append({**_row('failing_lanes', std, defect, '-', '-', 0, 0, 0),
                                 'note': 'no current-cycle reporting interval in D2 (no current data)'})
                 continue
-            gi = _d2_interval(iv[rows])
-            g = 1000 if gi >= 1000 else 100
-            # cracking at another D2 interval (e.g. 50 m): 10 m rows averaged per D2 block, breach per lane
-            from_10m = defect == 'cracking' and gi not in (100, 1000) and gi < 1000 and gi % 10 == 0
-            if from_10m:
-                g = gi
-            level = '1 km' if g == 1000 else f'{g} m'
-            table = 'master_cracking' if from_10m else f"{prefix}_{'parent' if g == 1000 else 'child_100m'}"
+            g = 1000 if iv[rows].mode().iloc[0] >= 1000 else 100
+            level = '1 km' if g == 1000 else '100 m'
+            table = f"{prefix}_{'parent' if g == 1000 else 'child_100m'}"
             flag = d2.loc[rows, flc].astype(str).str.strip().str.title()
             ok_val = flag.isin(['Yes', 'No'])
             skipped = int((~ok_val).sum())
             ref = pd.DataFrame({'bin': (st[rows][ok_val] // g * g), 'd2': flag[ok_val]}).dropna(subset=['bin'])
             ref['bin'] = ref['bin'].astype('int64')
-            if gi not in (100, 1000) and not from_10m:
-                summary.append({**_row('failing_lanes', std, defect, '-', f'{gi} m', 0, 0, skipped),
-                                'd2_rows': len(ref), 'status': 'NOT RUN',
-                                'note': f'D2 interval {gi} m: silver has {defect} only at 100 m and 1 km'})
-                continue
             if table not in tables:
                 summary.append({**_row('failing_lanes', std, defect, '-', level, 0, 0, skipped),
                                 'd2_rows': len(ref), 'status': 'NOT RUN', 'note': f'{table} not in this run'})
                 continue
-            # silver breach per lane and block (10 m rows averaged per D2 block, or the 100 m / 1 km table)
-            lanes = sorted(prj.d4_long['lane'].unique())
-            if from_10m:
-                per_lane = {ln: num(_silver_bins(prj, tables, 'cracking', std, ln, g)['silver_breach']) for ln in lanes}
-            else:
-                s = tables[table]
-                s = s[s['threshold_name'] == f'As per {std}']
-                bf = pd.to_numeric(s['breach_flag'], errors='coerce')
-                if bf.isna().all():
-                    summary.append({**_row('failing_lanes', std, defect, '-', level, 0, 0, skipped),
-                                    'd2_rows': len(ref), 'status': 'NO DATA',
-                                    'note': f'{table}: breach_flag NULL (no D2 threshold)'})
-                    continue
-                s = s.assign(_b=s['start_chainage'].astype('int64') // g * g, _bf=bf)
-                per_lane = {ln: grp.groupby('_b')['_bf'].max() for ln, grp in s.groupby('lane')}
-            # D2 built 'Failing Lanes' from its own lane values: a lane D2 lists end-to-start (value check) counts
-            # in D2's order here too
-            rev = sorted(ln for ln in per_lane if (std, defect, ln) in getattr(prj, '_dq_reversed_lanes', set()))
-            for ln in rev:
-                v = per_lane[ln].sort_index()
-                per_lane[ln] = pd.Series(v.to_numpy()[::-1], index=v.index)
-            sil = (pd.concat(per_lane.values()).groupby(level=0).max().map({1.0: 'Yes', 0.0: 'No'})
-                   if per_lane else pd.Series(dtype=object))
+            s = tables[table]
+            s = s[s['threshold_name'] == f'As per {std}']
+            bf = pd.to_numeric(s['breach_flag'], errors='coerce')
+            if bf.isna().all():
+                summary.append({**_row('failing_lanes', std, defect, '-', level, 0, 0, skipped),
+                                'd2_rows': len(ref), 'status': 'NO DATA',
+                                'note': f'{table}: breach_flag NULL (no D2 threshold)'})
+                continue
+            sil = (s.assign(_b=s['start_chainage'].astype('int64') // g * g, _bf=bf)
+                   .groupby('_b')['_bf'].max().map({1.0: 'Yes', 0.0: 'No'}))
             j = ref.join(sil.rename('silver'), on='bin')
             ok = j['d2'] == j['silver']
-            row = _row('failing_lanes', std, defect, '-', level, len(j), int(ok.sum()), skipped,
-                       note=(f"{'master_cracking 10 m rows averaged per ' + str(g) + ' m' if from_10m else table}: "
-                             f"Yes when any lane breaches (D2 Yes {int((j['d2'] == 'Yes').sum()):,}, "
-                             f"silver Yes {int((j['silver'] == 'Yes').sum()):,})"))
-            if rev:
-                row['note'] = f"lanes {', '.join(rev)} in D2's reversed order (see value checks). " + row['note']
-                if row['status'] == 'PASS':
-                    row['status'] = 'D2 REVERSED'
-            summary.append(row)
+            summary.append(_row('failing_lanes', std, defect, '-', level, len(j), int(ok.sum()), skipped,
+                                note=f"{table}: Yes when any lane has breach_flag = 1 "
+                                     f"(D2 Yes {int((j['d2'] == 'Yes').sum()):,}, silver Yes {int((j['silver'] == 'Yes').sum()):,})"))
             for _, q in j[~ok].iterrows():
                 mism.append({'check': 'failing_lanes', 'std': std, 'defect': defect, 'lane': '-', 'level': level,
                              'bin_start': int(q['bin']), 'd2_value': q['d2'], 'silver_value': q['silver'],
@@ -263,51 +180,13 @@ def _failing_lanes_checks(prj, tables, summary, mism):
                                                       else 'Failing Lanes differs')})
 
 
-def _d2_lane_reversed(ref, sb, defect, g):
-    """True when a lane's D2 values match silver only in REVERSE chainage order: the vendor wrote that lane's
-    values end-to-start (seen in a D2 CA sheet whose R-lane cracking columns run backwards while its IRC sheet,
-    its other CA columns and D4 run forwards). Needs ≥ DQ_PASS_PCT matches reversed AND more than as is,
-    so a real silver difference is never hidden."""
-    r = ref.sort_values('ch')
-    s = num(sb['silver']).reindex((r['ch'] // g * g).astype('int64')).to_numpy(dtype=float)
-    d = r['d2'].to_numpy(dtype=float)
-    if not len(d):
-        return False
-    tol = _tolerance(defect, r['d2'])
-
-    def share(v):
-        ok = np.abs(v - s) <= tol
-        if defect == 'roughness':
-            ok = ok | _roughness_iri_ok(pd.Series(v), pd.Series(s)).to_numpy()
-        return float(np.mean(ok))
-    as_is, rev = share(d), share(d[::-1])
-    return rev * 100 >= config.DQ_PASS_PCT and rev > as_is
-
-
 def _value_and_breach_checks(prj, tables, summary, mism):
     lanes = sorted(prj.d4_long['lane'].unique())
-    reversed_lanes = set()                      # (std, defect, lane) whose D2 values run end-to-start
-    n0 = len(summary)
-    _value_and_breach_lanes(prj, tables, summary, mism, lanes, reversed_lanes)
-    for row in summary[n0:]:
-        if (row['std'], row['defect'], row['lane']) in reversed_lanes and row['check'] in ('value', 'breach'):
-            if row['status'] == 'PASS':
-                row['status'] = 'D2 REVERSED'          # not PASS / FAIL: D2 itself must be corrected by the vendor
-            row['note'] = ('D2 lists this lane END-TO-START (reversed chainage order); compared reversed. '
-                           + str(row.get('note') or ''))
-    prj._dq_reversed_lanes = reversed_lanes   # used by the failing-lanes check
-    for std, defect, lane in sorted(reversed_lanes):
-        print(f"  DQ: D2 {std} {defect} {lane} values are in reversed chainage order (vendor D2) - see dq_summary")
-
-
-def _value_and_breach_lanes(prj, tables, summary, mism, lanes, reversed_lanes):
     for std, d2 in [('CA', prj.d2_ca), ('IRC', prj.d2_irc)]:
         if d2.empty:
             continue
         c = list(d2.columns)
         st = parse_chainage(d2[pick(c, 'chainage', 'start')])
-        end_c = pick(c, 'chainage', 'end')
-        blk_len = (parse_chainage(d2[end_c]) - st).abs() if end_c else pd.Series(np.nan, index=d2.index)
         for defect, (key, flag_kw, _) in VALUE_CHECKS.items():
             ric = pick(c, 'current', key, 'reporting interval')
             for lane in lanes:
@@ -318,35 +197,18 @@ def _value_and_breach_lanes(prj, tables, summary, mism, lanes, reversed_lanes):
                 raw = d2[vc]
                 val = num(raw)
                 skipped = int((raw.notna() & val.isna()).sum())          # e.g. 'Under Const.'
-                ref = pd.DataFrame({'ch': st, 'len': blk_len, 'd2': val}).dropna(subset=['ch', 'd2'])
+                ref = pd.DataFrame({'ch': st, 'd2': val}).dropna()
                 if ref.empty:
                     continue
                 ri = num(d2[ric]).dropna() if ric else pd.Series([100])
-                gi = _d2_interval(ri)           # D2's own interval (50, 100, 1000 …)
-                g = 1000 if gi >= 1000 else 100
-                crack100 = defect == 'cracking' and gi < 1000 and gi % 10 == 0
-                if crack100 or gi in (100, 1000):
-                    # vendor wrote this lane's values end-to-start? compare in that order, flag it (D2 REVERSED)
-                    gb = gi if crack100 else g
-                    sb0 = _silver_bins(prj, tables, defect, std, lane, gb)
-                    if len(sb0) and _d2_lane_reversed(ref, sb0, defect, gb):
-                        ref = ref.sort_values('ch').assign(d2=lambda z: z['d2'].to_numpy()[::-1])
-                        reversed_lanes.add((std, defect, lane))
-                if crack100:                    # cracking at D2's interval from the 10 m rows (any multiple of 10 m)
-                    g = gi
-                    _crack_checks(prj, tables, summary, mism, std, lane, ref, skipped, gi)
-                level = '1 km' if g == 1000 else f'{g} m'
+                g = 1000 if (len(ri) and ri.mode().iloc[0] >= 1000) else 100
+                crack100 = defect == 'cracking' and g == 100
+                if crack100:                    # three cracking tables vs D2 100 m (value); breach below
+                    _crack_checks(prj, tables, summary, mism, std, lane, ref, skipped)
+                level = '1 km' if g == 1000 else '100 m'
                 need = 'master_cracking' if defect == 'cracking' else f"master_{defect}_{'parent' if g >= 1000 else 'child_100m'}"
-                if not crack100 and gi not in (100, 1000):
-                    # rutting / roughness are only built at 100 m and 1 km: a D2 block of another size has no
-                    # silver row to compare with → NOT RUN (comparing it with a 100 m row would be a false FAIL)
-                    summary.append({**_row('value', std, defect, lane, f'{gi} m', 0, 0, skipped),
-                                    'd2_rows': len(ref), 'status': 'NOT RUN',
-                                    'note': f'D2 interval {gi} m: silver has {defect} only at 100 m and 1 km'})
-                    continue
-                if crack100:                    # breach flags: 100 m table at 100 m, else the 10 m rows averaged
-                    t100 = ('master_cracking_child_100m' if gi == 100 and 'master_cracking_child_100m' in tables
-                            else None)
+                if crack100:                    # breach flags: from master_cracking_child_100m (else 10 m rows averaged)
+                    t100 = 'master_cracking_child_100m' if 'master_cracking_child_100m' in tables else None
                     if not t100 and 'master_cracking' not in tables:
                         continue
                     sb = _silver_bins(prj, tables, defect, std, lane, g, t100)
@@ -359,9 +221,7 @@ def _value_and_breach_lanes(prj, tables, summary, mism, lanes, reversed_lanes):
                     sb = _silver_bins(prj, tables, defect, std, lane, g)
                     j = ref.join(sb, on='bin', how='left')
                     diff = (j['d2'] - num(j['silver'])).abs()
-                    ok = diff <= _tolerance(defect, ref['d2'])
-                    if defect == 'roughness':
-                        ok = ok | _roughness_iri_ok(j['d2'], num(j['silver']))
+                    ok = diff <= config.DQ_TOLERANCE_BY_DEFECT.get(defect, config.DQ_TOLERANCE)
                     summary.append(_row('value', std, defect, lane, level, len(j), int(ok.sum()), skipped))
                     bad = j[~ok]
                     for _, r in bad.iterrows():
@@ -374,8 +234,6 @@ def _value_and_breach_lanes(prj, tables, summary, mism, lanes, reversed_lanes):
                 if std == 'CA' and fc:
                     # same D2 rows as the value check (rows with a value); flags on blank rows are not compared
                     fl = pd.DataFrame({'ch': st, 'flag': num(d2[fc]), 'v': val}).dropna()
-                    if len(fl) and (std, defect, lane) in reversed_lanes:     # D2 flags run end-to-start too
-                        fl = fl.sort_values('ch').assign(flag=lambda z: z['flag'].to_numpy()[::-1])
                     if len(fl):
                         fl['bin'] = (fl['ch'] // g * g).astype('int64')
                         jf = fl.join(sb, on='bin', how='left')
@@ -465,9 +323,9 @@ def _threshold_check(prj, summary, mism):
        (there are no default thresholds, so that defect's threshold_value / breach_flag / road_condition are NULL)."""
     from common.project import DEFECTS
     for std in ['ca', 'irc']:
-        for d in DEFECTS:
+        for d in [x for x in DEFECTS if x != 'ravelling']:       # ravelling: no tables, no DQ check
             v = prj.thr[std][d]
-            found = v is not None
+            found = v is not None              # IRC: a D2 value or the IRC standard (D-3 SOP) both count
             note = (f"{prj.thr_op(std, d)} {v:g} from {prj.thr_src.get((std, d), 'D2')}" if found else
                     "threshold NOT in D2 → threshold_value, breach_flag, road_condition and calculated "
                     "severity / ratings are NULL for this defect + standard")
@@ -484,9 +342,17 @@ def run_dq(prj, tables=None):
     _threshold_check(prj, summary, mism)
     for std, d2 in [('CA', prj.d2_ca), ('IRC', prj.d2_irc)]:      # a missing D2 sheet is shown, never replaced
         if d2.empty:
-            summary.append({**_row('d2_sheet', std, '-', '-', '-', 0, 0, 0), 'status': 'NOT RUN',
-                            'note': f"D2 'Comparison as per {std}' not found → {std} rows are not compared with D2 "
-                                    f"(the other sheet is not used in its place)"})
+            summary.append({**_row('d2_sheet', std, '-', '-', '-', 0, 0, 0), 'status': 'FAIL',
+                            'note': f"GATE: D2 'Comparison as per {std}' not found → {std} rows are not compared with "
+                                    f"D2; the {'IRC' if std == 'CA' else 'CA'} sheet is NOT used in its place"})
+    # gate: interval of the as per CA tables must come from the D2 CA sheet (never IRC)
+    from common.hierarchy import ca_interval
+    for d in ['roughness', 'rutting']:            # cracking: fixed 100 m; ravelling: no tables
+        iv, how = ca_interval(prj, d)
+        ok = how.startswith('D2 Comparison as per CA')
+        summary.append({**_row('as_per_ca_interval', 'CA', d, '-', f"{iv} m" if iv else '-', 1, int(ok), 0),
+                        'status': 'PASS' if ok else 'FAIL',
+                        'note': ('' if ok else 'GATE: ') + f"{iv} m from {how}" if iv else f"GATE: {how}"})
     _value_and_breach_checks(prj, tables, summary, mism)
     _failing_lanes_checks(prj, tables, summary, mism)
     _pothole_check(prj, tables, summary, mism)
