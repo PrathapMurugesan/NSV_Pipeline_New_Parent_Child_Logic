@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 
+import config
 from common.output import run_table, standalone
 
 TABLE = 'master_reporting_interval'
@@ -61,7 +62,8 @@ def build(prj):
 
 
 def run(prj, write=True):
-    return run_table(TABLE, build, prj, write, apply_finalize=False, breach_copy=False)
+    return run_table(TABLE, build, prj, write, apply_finalize=False, breach_copy=False,
+                     folder=config.HIERARCHY_FOLDER)
 
 
 if __name__ == '__main__':

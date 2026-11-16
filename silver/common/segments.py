@@ -112,26 +112,9 @@ def _weighted_means(a, keys):
     return pd.DataFrame(out)
 
 
-def assign_blocks(start, blocks):
-    """Block start (D2 row start) of every chainage, NaN when the chainage is in no block [start, end)."""
-    s = np.asarray(start, float)
-    bs, be = blocks['start'].to_numpy(float), blocks['end'].to_numpy(float)
-    i = np.searchsorted(bs, s, side='right') - 1
-    ok = (i >= 0) & (s < be[np.clip(i, 0, len(be) - 1)])
-    return np.where(ok, bs[np.clip(i, 0, len(bs) - 1)], np.nan)
-
-
-def aggregate(n, bin_m, defect, blocks=None, iri_decimals=None):
+def aggregate(n, bin_m, defect):
     a = n.copy()
-    if blocks is not None:
-        # D2 blocks: every D4 10 m row goes to the D2 row its start falls in (D2's own, possibly uneven, intervals)
-        a['_b'] = assign_blocks(a['start_chainage'], blocks)
-        out_of_d2 = int(a['_b'].isna().sum())
-        if out_of_d2:
-            print(f"  NOTE: {out_of_d2:,} D4 lane-rows are outside the D2 chainage rows → not in the D2 blocks")
-        a = a[a['_b'].notna()]
-    else:
-        a['_b'] = a['start_chainage'] // bin_m * bin_m
+    a['_b'] = a['start_chainage'] // bin_m * bin_m
     g = a.groupby(['lane', '_b'], dropna=False).agg(_AGG).reset_index().rename(columns={'row_id': 'segment_count'})
     wm = _weighted_means(a, ['lane', '_b'])
     if len(wm):
@@ -141,34 +124,15 @@ def aggregate(n, bin_m, defect, blocks=None, iri_decimals=None):
     if defect == 'roughness':
         lr = g['lwp_iri'].notna() & g['rwp_iri'].notna()
         g.loc[lr, 'iri_value'] = (g.loc[lr, 'lwp_iri'] + g.loc[lr, 'rwp_iri']) / 2
-        if iri_decimals is not None:                            # CA: IRI rounded as D2 CA before BI
-            g['iri_value'] = g['iri_value'].round(int(iri_decimals))
         if config.ROUGHNESS_AGGREGATION == 'iri_formula':
             # average IRI, then BI = 630 × IRI^1.12 (how D2 is built)
             v = g['iri_value'].notna()
             g.loc[v, 'roughness_bi'] = 630.0 * g.loc[v, 'iri_value'] ** 1.12
         # 'mean_bi': roughness_bi is already the average of the 10 m BI (from the groupby above)
         g['metric_value'] = g['roughness_bi']
-    if defect == 'ravelling' and blocks is None:
+    if defect == 'ravelling':
         g = _ravelling_pct_from_sqm(g, bin_m)
-    if blocks is not None:
-        g = _fill_d2_blocks(g, blocks, sorted(n['lane'].dropna().unique()))
     return g.drop(columns=['_b'])
-
-
-def _fill_d2_blocks(g, blocks, lanes):
-    """One row per lane per D2 block (also blocks with no D4 data → values NULL, segment_count 0); start / end /
-    length / reporting interval = the D2 row's."""
-    grid = pd.MultiIndex.from_product([lanes, blocks['start'].astype(float)], names=['lane', '_b']).to_frame(index=False)
-    g = grid.merge(g, on=['lane', '_b'], how='left')
-    bl = blocks.set_index(blocks['start'].astype(float))
-    g['start_chainage'] = g['_b']
-    g['end_chainage'] = g['_b'].map(bl['end'])
-    g['length_m'] = g['end_chainage'] - g['start_chainage']
-    g['segment_count'] = g['segment_count'].fillna(0)
-    g['d2_interval_m'] = g['_b'].map(bl['interval_m'])
-    g['d2_interval_source'] = g['_b'].map(bl['interval_source'])
-    return g
 
 
 def _ravelling_pct_from_sqm(g, block_m):
@@ -206,7 +170,7 @@ def aggregate_from_100m(g100, defect):
     return g.drop(columns=['_b'])
 
 
-def level_input(prj, defect, level, blocks=None, iri_decimals=None):
+def level_input(prj, defect, level):
     """Rows for the requested level (before building records):
        10 m = D4 rows;  100 m = aggregate of the 10 m rows;
        1 km = aggregate of the 10 m rows (PARENT_AGGREGATION 'from_10m', as D2) or of the 100 m rows ('from_100m')."""
@@ -215,8 +179,6 @@ def level_input(prj, defect, level, blocks=None, iri_decimals=None):
         return n10
     if level == 'child_10m':
         return split_10m(n10)
-    if blocks is not None:                                         # D2 rows (as per CA): D2's own intervals
-        return aggregate(n10, None, defect, blocks, iri_decimals)
     if level == 'parent' and config.PARENT_AGGREGATION == 'from_10m':
         return aggregate(n10, config.PARENT_LENGTH_M, defect)      # 1 km = average of all 10 m values (as D2)
     g100 = aggregate(n10, config.CHILD_100M, defect)
@@ -230,11 +192,10 @@ def _breach(prj, defect, metric, bi, std):
     return breach(metric, prj.thr[std][defect], prj.thr_op(std, defect))
 
 
-def build_linear_table(prj, defect, level, blocks=None, iri_decimals=None):
-    """Full CA + IRC record set for master_<defect>_<level> (before PCI / ratings).
-    blocks = D2 rows (start, end, interval_m): rows at D2's own intervals instead of fixed bins."""
+def build_linear_table(prj, defect, level):
+    """Full CA + IRC record set for master_<defect>_<level> (before PCI / ratings)."""
     tbl = f"master_{defect}_{level}"
-    p = level_input(prj, defect, level, blocks, iri_decimals)
+    p = level_input(prj, defect, level)
     if p.empty:
         print(f"  {tbl}: no D4 data")
         return pd.DataFrame()
@@ -265,8 +226,6 @@ def build_linear_table(prj, defect, level, blocks=None, iri_decimals=None):
     out['metric_name'] = METRIC_NAME[defect]
     out['metric_value'] = metric.values
     out['total_children'] = p.get('segment_count', pd.Series(1, index=p.index)).fillna(1).astype(int).values
-    if 'd2_interval_m' in p:
-        out['_d2_interval_m'] = p['d2_interval_m'].values
     out['segment_count'] = out['total_children']
     out['length_m'] = seg.values
     out['start_chainage'] = p['start_chainage'].astype('int64').values

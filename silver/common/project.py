@@ -717,37 +717,6 @@ class Project:
     D2_INTERVAL_WORDS = {'roughness': ('roughness',), 'rutting': ('rut',), 'cracking': ('crack',),
                          'ravelling': ('ravel',)}
 
-    def d2_blocks(self, std, defect):
-        """Every row of the D2 sheet ('Comparison as per CA' / 'as per IRC') as a block with ITS OWN reporting interval:
-           DataFrame start, end, interval_m, interval_source. interval = the row's 'Current Cycle | <defect> |
-           Reporting Interval', else the row's 'Overall Reporting Interval' (never the other standard's sheet), else
-           end − start. Rows without a start or end chainage are left out. Empty when there is no sheet."""
-        d2 = self.d2_irc if str(std).upper() == 'IRC' else self.d2_ca
-        if d2 is None or d2.empty:
-            return pd.DataFrame(columns=['start', 'end', 'interval_m', 'interval_source'])
-        cols = list(d2.columns)
-        sc, ec = pick(cols, 'chainage', 'start'), pick(cols, 'chainage', 'end')
-        dcol = ocol = None
-        for c in cols:
-            n = norm_name(c)
-            if 'previous' in n or 'reporting interval' not in n:
-                continue
-            if 'overall reporting interval' in n:
-                ocol = ocol or c
-            elif ('current cycle' in n and defect in self.D2_INTERVAL_WORDS
-                  and all(w in n for w in self.D2_INTERVAL_WORDS[defect])):
-                dcol = dcol or c
-        b = pd.DataFrame({'start': num(d2[sc]) if sc else np.nan, 'end': num(d2[ec]) if ec else np.nan})
-        di = num(d2[dcol]) if dcol else pd.Series(np.nan, index=d2.index)
-        oi = num(d2[ocol]) if ocol else pd.Series(np.nan, index=d2.index)
-        b['interval_m'] = di.where(di.notna(), oi).where(lambda s: s.notna(), b['end'] - b['start'])
-        b['interval_source'] = np.where(di.notna(), f'D2 {std.upper()} {defect} interval',
-                                        np.where(oi.notna(), f'D2 {std.upper()} Overall Reporting Interval',
-                                                 'D2 row length (end − start)'))
-        b = b.dropna(subset=['start', 'end'])
-        b = b[b['end'] > b['start']].sort_values('start').drop_duplicates('start').reset_index(drop=True)
-        return b
-
     def d2_interval(self, std, defect):
         """Reporting interval (m) from D2, CURRENT CYCLE only — the one place every interval comes from:
            sheet 'Comparison as per CA' (std CA) or 'as per IRC' (std IRC), column

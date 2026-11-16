@@ -241,7 +241,7 @@ _D2_VALUE_GROUP = {'roughness': 'roughness bi', 'rutting': 'rut depth', 'crackin
                    'ravelling': 'ravelling'}
 
 
-def check_vs_d2(prj, defect, df, iv, table, by_start=False):
+def check_vs_d2(prj, defect, df, iv, table):
     """metric_value of every lane / block vs the D2 lane value of the same block (current cycle).
        D2 sheet: CA only (IRC is never used in place of CA). Prints match % per lane and writes
        every mismatch to <out>/dq/<table>_vs_d2.csv. Tolerance = config.DQ_TOLERANCE_BY_DEFECT / DQ_TOLERANCE."""
@@ -262,11 +262,10 @@ def check_vs_d2(prj, defect, df, iv, table, by_start=False):
         col = next((c for c in d2.columns if norm_name(c) == f'current cycle | {grp} | {lane.lower()}'), None)
         if col is None:
             continue
-        kb = (lambda x: x) if by_start else (lambda x: x // iv * iv)    # D2 rows: same start; else same bin
-        ref = pd.DataFrame({'b': kb(st), 'd2': num(d2[col])}).dropna()
+        ref = pd.DataFrame({'b': (st // iv * iv), 'd2': num(d2[col])}).dropna()
         ref = ref.groupby('b', as_index=False)['d2'].first()
         sv = df[df['lane'] == lane]
-        sv = pd.DataFrame({'b': kb(num(sv['start_chainage']).astype(float)), 'silver': num(sv['metric_value'])})
+        sv = pd.DataFrame({'b': num(sv['start_chainage']) // iv * iv, 'silver': num(sv['metric_value'])})
         m = ref.merge(sv, on='b', how='left')
         ok = (m['d2'] - m['silver']).abs() <= tol
         rows.append((lane, len(m), int(ok.sum())))
@@ -279,7 +278,7 @@ def check_vs_d2(prj, defect, df, iv, table, by_start=False):
     if not tot:
         print(f"  {table} vs D2 ({sheet} sheet): D2 has no current-cycle '{grp}' values → nothing to compare")
         return
-    print(f"  {table} vs D2 ({sheet} sheet, {'D2 rows' if by_start else f'{iv} m'}, tolerance {tol:g}): {hit:,}/{tot:,} blocks match "
+    print(f"  {table} vs D2 ({sheet} sheet, {iv} m, tolerance {tol:g}): {hit:,}/{tot:,} blocks match "
           f"({100.0 * hit / tot if tot else 0:.1f}%) | " + ", ".join(f"{l} {h}/{n}" for l, n, h in rows))
     if mism:
         out = pd.concat(mism, ignore_index=True)[['lane', 'b', 'd2', 'silver', 'diff']].rename(columns={'b': 'block_start'})
@@ -312,66 +311,30 @@ def _rows_at_interval(prj, defect, iv):
     return df
 
 
-def _rows_at_d2_blocks(prj, defect, blocks):
-    """NSV lane-wise CA + IRC rows of the defect, one per lane per D2 CA row (D2's own start / end / interval):
-    the D4 10 m values of the block aggregated with the NSV formulas (length-weighted); every other column from D4
-    / D1 as in the NSV tables. A D2 row with no D4 data in a lane → row with NULL values."""
-    from common.segments import build_linear_table, assign_blocks
-    from common.finalize import finalize
-    raw = build_linear_table(prj, defect, 'child_100m', blocks,
-                             config.CA_IRI_DECIMALS if defect == 'roughness' else None)
-    if raw.empty:
-        return raw
-    d2iv = raw.pop('_d2_interval_m') if '_d2_interval_m' in raw else None
-    df = finalize(raw, f'master_{defect}_child_100m', prj)
-    if d2iv is not None:
-        df['reporting_interval_m'] = num(d2iv).values           # each row: its own D2 interval (not the most common)
-    # PCI of a block = mean of its 10 m PCI values (same rule as 100 m / 1 km)
-    p10 = prj.pci_lookup[10].rename('pci').reset_index()
-    p10['ch'] = assign_blocks(p10['ch'], blocks)
-    look = p10.dropna(subset=['ch']).groupby(['lane', 'ch'])['pci'].mean().round(4)
-    key = pd.MultiIndex.from_arrays([df['lane'], num(df['start_chainage']).astype(float)])
-    df['pci'] = look.reindex(key).values
-    return df
-
-
 def build_child_as_per_ca(prj, defect):
-    """child_<d>_as_per_ca: one row per lane per D2 CA row — D2 gives the chainage and the reporting interval of
-    every row (its own interval, not the most common one: defect column, else Overall, else end − start); the values
-    are the D4 10 m values aggregated over that row. No D2 CA sheet → config default interval + DQ gate FAIL
-    (the IRC sheet is never used)."""
     table = f'child_{defect}_as_per_ca'
-    blocks = prj.d2_blocks('CA', defect)
-    if len(blocks):
+    iv, how = ca_interval(prj, defect)
+    if not iv:
+        print(f"  WARNING: {table}: {how} and config.CHILD_AS_PER_CA_DEFAULT_M is None → table left empty")
+        return pd.DataFrame(columns=columns_of(defect))
+    if iv == int(config.CHILD_100M):
         src_t = f'master_{defect}_child_100m'
-        src = _rows_at_d2_blocks(prj, defect, blocks)
-        ivs = blocks['interval_m'].value_counts().to_dict()
-        print(f"  D2 CA rows: {len(blocks)} blocks, intervals {ivs} → D4 aggregated per D2 row")
-        if src is None or src.empty:
-            return pd.DataFrame(columns=columns_of(defect))
-        out = _ca_rows(src)
-        check_vs_d2(prj, defect, out, None, table, by_start=True)
+        src = built_table(prj, src_t)
+    elif iv == KM:
+        src_t = f'master_{defect}_parent'
+        src = built_table(prj, src_t)
     else:
-        iv, how = ca_interval(prj, defect)
-        if not iv:
-            print(f"  WARNING: {table}: {how} and config.CHILD_AS_PER_CA_DEFAULT_M is None → table left empty")
-            return pd.DataFrame(columns=columns_of(defect))
-        # no D2 CA rows: even blocks of iv m over the D4 extent (last block ends at the D4 end)
-        d4 = prj.d4_long
-        lo = float(np.floor(num(d4['start_chainage']).min() / iv) * iv)
-        hi = float(num(d4['end_chainage']).max())
-        st = np.arange(lo, hi, iv)
-        blocks = pd.DataFrame({'start': st, 'end': np.minimum(st + iv, hi), 'interval_m': float(iv),
-                               'interval_source': how})
-        src_t = f'master_{defect}_child_100m'
-        print(f"  CA reporting interval {iv} m ({how}) → D4 aggregated per {iv} m")
-        src = _rows_at_d2_blocks(prj, defect, blocks)
-        if src is None or src.empty:
-            return pd.DataFrame(columns=columns_of(defect))
-        out = _ca_rows(src)
+        src_t = f'master_{defect}_child_{iv}m'
+        src = _rows_at_interval(prj, defect, iv)
+    print(f"  CA reporting interval {iv} m ({how}) → CA rows of {src_t}")
+    if src is None or src.empty:
+        return pd.DataFrame(columns=columns_of(defect))
+    out = _ca_rows(src)
+    check_vs_d2(prj, defect, out, iv, table)
     out['id'] = out['id'].str.replace(src_t, table, regex=False)
     out['collection_name'] = table
     out['level'] = 'child_as_per_ca'
+    out['reporting_interval_m'] = iv
     out['display_defect_id'] = None
     out = keep_rating(out, 'ca')                                   # CA only → rating_irc NULL
     out = side_parent_cols(out, prj)

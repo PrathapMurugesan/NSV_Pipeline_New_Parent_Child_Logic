@@ -117,16 +117,14 @@ OUTPUT_TABLES = [
     'master_cracking_ca', 'master_cracking_irc', 'child_10m_cracking',
     'new_master_pothole',
     'master_chainage',
+    'dlm_threshold_mapping',
+    'master_reporting_interval',
 ]
 #   child_<defect>_as_per_ca is built at the D2 CA reporting interval ONLY ('Comparison as per CA':
 #   'Current Cycle | <defect> | Reporting Interval', else 'Overall Reporting Interval'). The IRC sheet is never used
 #   in place of CA (and CA never in place of IRC). No CA interval → this default + DQ gate FAIL.
 #   Set to None to leave the table empty instead.
 CHILD_AS_PER_CA_DEFAULT_M = 100
-#   child_roughness_as_per_ca (CA only): the block's average lane IRI is rounded to this many decimals BEFORE
-#   BI = 630 × IRI^1.12 — the D2 'Comparison as per CA' sheet does the same (its BI = 630 × round(IRI, 2)^1.12).
-#   IRC tables are not rounded. None = no rounding.
-CA_IRI_DECIMALS = 2
 
 # ── Source order for point/area defects (first source that HAS data is used) ──
 #   'defect_report' = D4 defect report 10 m columns
@@ -206,7 +204,7 @@ CONDITION_SEVERITY_ORDER = ['very poor', 'poor', 'fair', 'good', 'very good']   
 # S3 root of the bronze NSV output. deliverable_path = <root>/zone=<z>/phase=<p>/cycle=<c>/<UPC>
 # (e.g. s3://dhms-new-stgae/nsv-extraction/bronze/nsv/zone=A/phase=2/cycle=1/N-02007-11001-HR).
 # Set to None to write the project folder the run read instead.
-BRONZE_S3_ROOT = 's3://dhms-new-stgae/nsv-extraction/bronze/nsv'
+BRONZE_S3_ROOT = 's3://dhms-new-stgae/nsv_extraction_new/bronze/nsv'
 # S3 location of the silver output (for reference). The code writes to OUTPUT_ROOT on the local / mounted disk;
 # that folder is what goes to this S3 prefix (same zone=/phase=/cycle=/<UPC> layout).
 SILVER_S3_ROOT = 's3://dhms-new-stgae/nsv-silver'

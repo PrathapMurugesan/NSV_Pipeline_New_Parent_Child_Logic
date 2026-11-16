@@ -20,7 +20,7 @@ set -uo pipefail
 
 # ── defaults ─────────────────────────────────────────────────────────────────
 BUCKET="dhms-new-stgae"
-BRONZE_PREFIX="nsv-extraction/bronze/nsv"
+BRONZE_PREFIX="nsv_extraction_new/bronze/nsv"
 SILVER_PREFIX="nsv-silver"
 REGION="ap-south-1"
 ZONE="A"

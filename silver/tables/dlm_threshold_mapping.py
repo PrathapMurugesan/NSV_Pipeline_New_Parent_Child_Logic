@@ -201,7 +201,8 @@ def build(prj):
 
 
 def run(prj, write=True):
-    return run_table(TABLE, build, prj, write, apply_finalize=False, breach_copy=False)
+    return run_table(TABLE, build, prj, write, apply_finalize=False, breach_copy=False,
+                     folder=config.HIERARCHY_FOLDER)
 
 
 if __name__ == '__main__':
