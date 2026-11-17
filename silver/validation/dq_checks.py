@@ -101,7 +101,7 @@ def _row(check, std, defect, lane, level, total, matched, skipped, note=''):
 
 def _crack_checks(prj, tables, summary, mism, std, lane, ref, skipped):
     """D2 100 m cracking % vs the three cracking tables (see CRACK_CHECKS); + CA breach flag vs the 100 m table."""
-    tol = config.DQ_TOLERANCE_BY_DEFECT.get('cracking', config.DQ_TOLERANCE)
+    
     for table, g, level in CRACK_CHECKS:
         if table not in tables:
             summary.append({**_row('value', std, 'cracking', lane, level, 0, 0, skipped),
@@ -111,7 +111,7 @@ def _crack_checks(prj, tables, summary, mism, std, lane, ref, skipped):
         if g == 1000:                         # D2 has no 1 km cracking: average of its 100 m values in the km
             r = r.groupby('bin', as_index=False)['d2'].mean()
         j = r.join(_silver_bins(prj, tables, 'cracking', std, lane, g, table), on='bin', how='left')
-        ok = (j['d2'] - num(j['silver'])).abs() <= tol
+        ok = (r2(j['d2']) - r2(j['silver'])).abs() < _HALF_STEP
         summary.append(_row('value', std, 'cracking', lane, level, len(j), int(ok.sum()), skipped, note=table))
         for _, q in j[~ok].iterrows():
             mism.append({'check': 'value', 'std': std, 'defect': 'cracking', 'lane': lane, 'level': level,
@@ -220,8 +220,14 @@ def _value_and_breach_checks(prj, tables, summary, mism):
                 if not crack100:                # cracking values were checked in _crack_checks
                     sb = _silver_bins(prj, tables, defect, std, lane, g)
                     j = ref.join(sb, on='bin', how='left')
-                    diff = (j['d2'] - num(j['silver'])).abs()
-                    ok = diff <= config.DQ_TOLERANCE_BY_DEFECT.get(defect, config.DQ_TOLERANCE)
+                    
+                    if defect == 'roughness':
+                      diff = (j['d2'] - num(j['silver'])).abs()
+                      ok = diff <= config.DQ_TOLERANCE_BY_DEFECT.get(defect, config.DQ_TOLERANCE)
+                    else:
+                      diff = (r2(j['d2']) - r2(j['silver'])).abs()
+                      ok = diff < _HALF_STEP
+                      
                     summary.append(_row('value', std, defect, lane, level, len(j), int(ok.sum()), skipped))
                     bad = j[~ok]
                     for _, r in bad.iterrows():
@@ -307,8 +313,8 @@ def _pothole_check(prj, tables, summary, mism):
         r = ref.loc[lane]
         s = sil.loc[lane] if lane in sil.index.get_level_values(0) else pd.Series(dtype=float)
         j = pd.DataFrame({'d2': r}).join(s.rename('silver'), how='left')
-        diff = (j['d2'] - j['silver'].fillna(0)).abs()
-        ok = diff <= config.DQ_AREA_TOLERANCE
+        diff = (r2(j['d2']) - r2(j['silver'].fillna(0))).abs()
+        ok = diff < _HALF_STEP
         summary.append(_row('pothole_area', '-', 'pothole', lane, '100 m', len(j), int(ok.sum()), 0,
                             note=f"D2 {r.sum():.3f} sq m vs silver {s.sum():.3f} sq m; silver source: {src}{sev_note}"))
         for b, row in j[~ok].iterrows():
