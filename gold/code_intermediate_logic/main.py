@@ -1,7 +1,7 @@
 """Affected-length intermediate pipeline (modular version of
 code_notebooks/Affected length intermediate logic v3 in_use.ipynb).
 
-Reads the silver tables and master_reporting_interval from INPUT_DIR and writes
+Reads the silver tables (names in utils/tables.py) and master_reporting_interval from INPUT_DIR and writes
 final_intermediate.csv to OUTPUT_DIR.
 All settings live in code_intermediate_logic/.env.
 
@@ -9,20 +9,27 @@ All settings live in code_intermediate_logic/.env.
 """
 import logging
 
+import pandas as pd
+
+from utils.chainage import to_lane_chainage
 from utils.config import load_settings
-from utils.defect_report import SOURCE_TABLES, build_defect_report, prepare_source
+from utils.defect_report import build_defect_report, prepare_source
 from utils.io_utils import load_table, save_csv
 from utils.reporting_intervals import load_reporting_intervals
 from utils.spine_flags import build_final_table, build_spine, flag_spine
+from utils.tables import SOURCE_TABLES
 
 log = logging.getLogger("affected_length")
 
 
 def run(settings):
     # --- 1. Load sources ---
-    table_files = {**SOURCE_TABLES, "cracking": settings.cracking_table}
-    sources = {key: prepare_source(load_table(settings.input_dir, name)) for key, name in table_files.items()}
-    chainage = load_table(settings.input_dir, "master_chainage")
+    sources = {}
+    for key, files in SOURCE_TABLES.items():
+        frames = [load_table(settings.input_dir, name) for name in files]
+        sources[key] = prepare_source(pd.concat(frames, ignore_index=True) if frames else None)
+    # new silver master_chainage (one row per 10 m, lanes as columns) -> one row per lane + survey
+    chainage = to_lane_chainage(load_table(settings.input_dir, "master_chainage"), list(sources.values()))
     ri = load_reporting_intervals(settings.input_dir, settings.reporting_intervals_table, settings.default_interval)
 
     # --- 2. Metric per reporting-interval window, flagged against the threshold ---

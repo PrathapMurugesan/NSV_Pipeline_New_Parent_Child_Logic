@@ -72,10 +72,10 @@ aws s3 sync "${S3_IN}" "${LOCAL_IN}" --region "$REGION" --only-show-errors --exc
 
 # silver writes nothing for an empty table, and gold stops on a missing file → list them all up front
 REQUIRED=(master_chainage master_reporting_interval dlm_threshold_mapping
-          master_roughness_parent master_roughness_child_100m master_roughness_child_10m
-          master_rutting_parent master_rutting_child_100m master_rutting_child_10m
-          master_cracking_parent master_cracking_child_100m master_cracking)
-[[ -n "$PROJECT_MASTER_S3" ]] && REQUIRED+=(master_pothole master_ravelling_parent)    # ris_view only
+          master_roughness child_roughness_as_per_ca child_10m_roughness child_100m_roughness
+          master_rutting child_rutting_as_per_ca child_10m_rutting child_100m_rutting
+          master_cracking_ca master_cracking_irc child_10m_cracking)
+[[ -n "$PROJECT_MASTER_S3" ]] && REQUIRED+=(master_pothole)    # ris_view only
 MISSING=()
 for t in "${REQUIRED[@]}"; do
   [[ -f "${LOCAL_IN}/${t}.parquet" ]] && echo "  ${t}: ok" || { echo "  ${t}: MISSING"; MISSING+=("$t"); }

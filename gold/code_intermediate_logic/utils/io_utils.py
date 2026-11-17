@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from utils.helpers import to_str_id
+from utils.helpers import explode_sides, to_str_id
 
 log = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ def find_table_file(directory, name):
 
 def load_table(input_dir, name):
     path = find_table_file(input_dir, name)
-    df = read_table_file(path)
+    df = explode_sides(read_table_file(path))
     # The notebook joined on phase/cycle; compare them as strings ('2.0' -> '2') across sources
     for col in ("phase", "cycle"):
         if col in df.columns:

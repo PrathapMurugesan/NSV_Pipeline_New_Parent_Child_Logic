@@ -46,7 +46,7 @@ def add_defect_type_keys(dw):
     - null Pavement_Type -> "Asphalt"
     - Point defects (Pothole, Cracking): Concrete -> "Rigid Pavements", otherwise "Flexible Pavement";
       Cracking on concrete -> "Crack on Rigid Pavement", otherwise "Cracking"
-    - Line defects: Roughness / Ravelling -> "Pavement (NSV)", Rutting -> "PAVEMENT"
+    - Line defects: Roughness -> "Pavement (NSV)", Rutting -> "PAVEMENT" (Ravelling removed)
     """
     dw = dw.copy()
     dw["Pavement_Type"] = dw["Pavement_Type"].fillna("Asphalt")
@@ -57,14 +57,14 @@ def add_defect_type_keys(dw):
 
     dw["Defect_Asset_Type"] = np.select(
         [is_point & is_concrete, is_point & ~is_concrete,
-         defect.isin(["Roughness", "Ravelling"]), defect == "Rutting"],
+         defect == "Roughness", defect == "Rutting"],
         ["Rigid Pavements", "Flexible Pavement", "Pavement (NSV)", "PAVEMENT"],
         default=None,
     )
     dw["Defect_Name"] = np.select(
         [(defect == "Cracking") & is_concrete, (defect == "Cracking") & ~is_concrete,
-         defect == "Pothole", defect == "Roughness", defect == "Ravelling", defect == "Rutting"],
-        ["Crack on Rigid Pavement", "Cracking", "Pothole", "Roughness", "Ravelling", "Rutting"],
+         defect == "Pothole", defect == "Roughness", defect == "Rutting"],
+        ["Crack on Rigid Pavement", "Cracking", "Pothole", "Roughness", "Rutting"],
         default=None,
     )
     return dw

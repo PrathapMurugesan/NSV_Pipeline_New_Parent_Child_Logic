@@ -1,7 +1,7 @@
 """Affected lengths from final_intermediate.
 
 Roughness / Rutting / Cracking -> summed from the <defect>_<std>_length columns
-Pothole / Ravelling           -> 0
+Pothole                       -> 0
 Total                         -> summed from total_affected_length_<std>, one row per UPC grain
 """
 import logging

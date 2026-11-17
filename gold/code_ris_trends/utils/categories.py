@@ -17,7 +17,7 @@ from functools import reduce
 import numpy as np
 import pandas as pd
 
-from utils.helpers import GE, GT, LE, LT, null_safe_compare, spark_round, to_str_id, upc_slash
+from utils.helpers import GE, GT, LE, LT, null_safe_compare, spark_round, standard_mask, to_str_id, upc_slash
 from utils.kpi_metrics import RENAME_TO_TARGET
 
 log = logging.getLogger(__name__)
@@ -35,11 +35,6 @@ THRESHOLD_ALIASES = {
     "ca_threshold": "CA Threshold",
     "irc_good": "IRC Threshold - Good", "irc_fair": "IRC Threshold - Fair", "irc_bad": "IRC Threshold - Bad",
 }
-
-
-def category_columns(defect):
-    return [f"{defect}_ca_category", f"{defect}_ca_threshold", f"lane_length_{defect}_ca",
-            f"{defect}_irc_category", f"{defect}_irc_threshold", f"lane_length_{defect}_irc"]
 
 
 def _cond_text(raw):
@@ -94,7 +89,7 @@ def prepare_thresholds(threshold_mapping, defect):
 
 
 def _prep_source(df, threshold_name, thr):
-    src = df[df["threshold_name"] == threshold_name]
+    src = df[standard_mask(df["threshold_name"], threshold_name)]  # also 'As per CA & IRC' rows
     out = src[GRAIN].copy()
     out["mv"] = pd.to_numeric(src["metric_value"], errors="coerce")
     out["len_m"] = (pd.to_numeric(src["end_chainage"], errors="coerce")

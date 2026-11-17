@@ -49,14 +49,14 @@ def build_spine(chainage_df):
     return spine
 
 
-def _same_key_types(left, right):
+def _same_key_types(left, right, keys=JOIN_KEYS):
     """merge_asof needs identical key dtypes on both sides. They differ per survey: chainages are int64 in a
     table with whole-metre chainages and float64 with decimals (or after the window floor()), and a date can
     be datetime in one source and text in another. Chainages → float64; a 'by' key whose dtypes differ →
     the same text form on both sides (dates as YYYY-MM-DD)."""
     left = left.assign(_smin=left["_smin"].astype("float64"), _smax=left["_smax"].astype("float64"))
     right = right.assign(_min=right["_min"].astype("float64"), _reach=right["_reach"].astype("float64"))
-    for k in JOIN_KEYS:
+    for k in keys:
         if left[k].dtype == right[k].dtype:
             continue
         if k == "detected_on":
@@ -87,6 +87,30 @@ def _covered(segments, intervals):
     return flags
 
 
+SIDE_PREFIX = {"LHS": "L", "RHS": "R"}
+
+
+def expand_sides(defected, spine):
+    """Windows reported per carriageway side (lane = 'LHS' / 'RHS', e.g. master_cracking_ca: value =
+    average of the side's lanes) -> one row per spine lane of that side (LHS -> L1, L2, ...), so the
+    window flags every lane it covers. Rows that already name a lane are kept as they are."""
+    side = defected["lane"].astype("string").str.strip().str.upper()
+    is_side = side.isin(list(SIDE_PREFIX)).fillna(False).astype(bool)
+    if not is_side.any():
+        return defected
+    keys = ["upc", "phase", "cycle", "source_system", "detected_on"]
+    lanes = spine[keys + ["lane"]].drop_duplicates()
+    lanes = lanes.assign(_side=lanes["lane"].astype("string").str.strip().str[0].str.upper()
+                         .map({v: k for k, v in SIDE_PREFIX.items()}))
+    sided = defected[is_side].assign(_side=side[is_side]).drop(columns="lane")
+    left, right = _same_key_types(sided.assign(_smin=0.0, _smax=0.0), lanes.assign(_min=0.0, _reach=0.0),
+                                  keys=keys)
+    expanded = left.merge(right[keys + ["_side", "lane"]], on=keys + ["_side"], how="inner")
+    expanded = expanded.drop(columns=["_side", "_smin", "_smax"])
+    log.info("Side-level windows (LHS/RHS): %s -> %s lane rows", int(is_side.sum()), len(expanded))
+    return pd.concat([defected[~is_side], expanded[defected.columns]], ignore_index=True)
+
+
 def flag_spine(spine, defect_report):
     """One row per spine segment with a 0/1 flag per defect type and standard."""
     defected = defect_report[defect_report["defect_flag"] == 1]
@@ -97,6 +121,7 @@ def flag_spine(spine, defect_report):
         "_max": np.fmax(defected["start_chainage"], defected["end_chainage"]),
         "_dt": defected["defect_type"],
     })
+    defected = expand_sides(defected, spine)
 
     segments = spine.reset_index(drop=True).assign(
         _row=lambda d: np.arange(len(d)),

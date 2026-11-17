@@ -1,6 +1,6 @@
 """RIS View pipeline (modular version of code_notebooks/RIS View Pipeline_v2 in_use.ipynb).
 
-Reads the silver defect tables from INPUT_DIR, the project master and the final_intermediate
+Reads the silver defect tables (names in utils/tables.py) from INPUT_DIR, the project master and the final_intermediate
 output of code_intermediate_logic, and writes ris_view_dw.csv to OUTPUT_DIR.
 DB id columns are not created here; they are added when the output is pushed to Postgres.
 All settings live in code_ris_view/.env.
@@ -15,16 +15,23 @@ from utils.defect_counts import combine_defects, count_defects
 from utils.io_utils import load_intermediate, load_table, save_csv
 from utils.output import build_ris_view_dw
 from utils.project_master import filter_project_upcs, load_project_master
+from utils.tables import DEFECT_TABLES
 
 log = logging.getLogger("ris_view")
 
-DEFECT_TABLES = ["master_pothole", "master_ravelling_parent", "master_roughness_parent", "master_rutting_parent"]
+
+def load_defect_table(input_dir, name):
+    """Silver defect table with Defect_Type set from utils/tables.py and only its standard's rows."""
+    defect_type, standard = DEFECT_TABLES[name]
+    df = load_table(input_dir, name)
+    if standard is not None:
+        df = df[df["threshold_name"] == standard]
+    return df.assign(defect_type=defect_type)
 
 
 def run(settings):
     # --- 1. Load sources ---
-    names = [settings.cracking_table] + DEFECT_TABLES
-    tables = {name: load_table(settings.input_dir, name) for name in names}
+    tables = {name: load_defect_table(settings.input_dir, name) for name in DEFECT_TABLES}
     project_info = load_project_master(settings.project_master_path)
     intermediate = load_intermediate(settings.intermediate_path)
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from utils.helpers import to_date, to_str_id
+from utils.helpers import explode_sides, to_date, to_str_id
 
 log = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ def _normalize_keys(df):
 
 def load_table(input_dir, name):
     path = find_table_file(input_dir, name)
-    df = _normalize_keys(read_table_file(path))
+    df = _normalize_keys(explode_sides(read_table_file(path)))
     log.info("Loaded %-35s rows: %s", path.name, f"{len(df):,}")
     return df
 

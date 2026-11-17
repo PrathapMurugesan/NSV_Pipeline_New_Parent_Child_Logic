@@ -24,7 +24,6 @@ def _bool(value):
 class Settings:
     input_dir: Path
     output_dir: Path
-    cracking_table: str             # file name (no extension) of the cracking source in input_dir
     project_master_path: Path       # contract-module project master (.csv / .xlsx)
     filter_by_project_master: bool  # keep only UPCs present in the project master
     intermediate_path: Path         # final_intermediate.csv from code_intermediate_logic
@@ -38,7 +37,6 @@ def load_settings(env_file=None):
     return Settings(
         input_dir=_path(env("INPUT_DIR", "../Input_silver_data_new")),
         output_dir=_path(env("OUTPUT_DIR", "../Output_KPI_data")),
-        cracking_table=env("CRACKING_TABLE", "master_cracking").strip(),
         project_master_path=_path(env("PROJECT_MASTER_PATH", "../project_master.xlsx")),
         filter_by_project_master=_bool(env("FILTER_BY_PROJECT_MASTER", "true")),
         intermediate_path=_path(env("INTERMEDIATE_PATH", "../Output_KPI_data/final_intermediate.csv")),

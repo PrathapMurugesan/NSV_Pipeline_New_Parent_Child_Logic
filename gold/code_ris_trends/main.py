@@ -7,6 +7,7 @@ DB id columns (UPC_ID, Survey_ID, Survey_Source_ID) are not created here; they a
 """
 import logging
 
+from utils.chainage import to_lane_chainage
 from utils.categories import build_category_table, merge_categories
 from utils.config import load_settings
 from utils.filters import filter_contract_upcs, filter_pavement_types, filter_upcs, log_table_summary
@@ -21,6 +22,10 @@ log = logging.getLogger("ris_trends")
 def run(settings):
     # --- 1. Load & filter silver tables ---
     tables = load_silver_tables(settings.input_dir)
+    # new silver master_chainage (one row per 10 m, lanes as columns) -> one row per lane, with the surveys
+    # (source_system / detected_on) of the defect tables
+    tables["master_chainage"] = to_lane_chainage(
+        tables["master_chainage"], [df for name, df in tables.items() if name != "master_chainage"])
     tables = filter_upcs(tables, settings.keep_upcs)
     tables = filter_pavement_types(tables, settings.keep_pavement_types)
     log_table_summary(tables)

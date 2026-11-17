@@ -5,15 +5,18 @@ from pathlib import Path
 
 import pandas as pd
 
-from utils.helpers import to_str_id
+from utils.helpers import explode_sides, to_str_id
 
 log = logging.getLogger(__name__)
 
-SILVER_TABLES = [
-    "master_roughness_parent", "master_roughness_child_10m",
-    "master_rutting_parent", "master_rutting_child_10m",
-    "master_chainage",
-]
+# internal key (used across the code) -> silver file name (new silver structure)
+SILVER_TABLES = {
+    "master_roughness_parent": "master_roughness",        # 1000 m, As per CA (+ pci)
+    "master_roughness_child_10m": "child_10m_roughness",  # 10 m, CA & IRC
+    "master_rutting_parent": "master_rutting",            # 1000 m, As per CA (+ pci)
+    "master_rutting_child_10m": "child_10m_rutting",      # 10 m, CA & IRC
+    "master_chainage": "master_chainage",                 # 10 m spine
+}
 
 _READERS = {
     ".parquet": pd.read_parquet,
@@ -45,14 +48,14 @@ def find_table_file(directory, name):
 
 def load_silver_tables(input_dir, table_names=SILVER_TABLES):
     tables = {}
-    for name in table_names:
-        df = read_table_file(find_table_file(input_dir, name))
+    for name, file_name in table_names.items():
+        df = explode_sides(read_table_file(find_table_file(input_dir, file_name)))
         # The notebook compared phase/cycle as strings ('2.0' -> '2') before every join
         for col in ("phase", "cycle"):
             if col in df.columns:
                 df[col] = to_str_id(df[col])
         tables[name] = df
-        log.info("Loaded %-30s rows: %s", name, f"{len(df):,}")
+        log.info("Loaded %-30s (%s) rows: %s", name, file_name, f"{len(df):,}")
     return tables
 
 
