@@ -2,7 +2,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Run the NSV silver layer on EC2 for ONE UPC stored in S3.
 #
-#   input : s3://dhms-new-stgae/nsv-extraction/bronze/nsv/zone=A/phase=2/cycle=1/N-02007-11001-HR/
+#   input : s3://dhms-new-stgae/nsv_extraction_new/bronze/nsv/zone=A/phase=2/cycle=1/N-02007-11001-HR/
 #   output: s3://dhms-new-stgae/nsv-silver/zone=A/phase=2/cycle=1/N-02007-11001-HR/
 #
 # Usage (defaults = the UPC above):
@@ -30,10 +30,11 @@ UPC="N-02007-11001-HR"
 TRACKER_S3=""            # optional: s3://.../NSV_Activity_Tracker_ZoneWise_Standardized.xlsx
 EXCEL=0                  # 0 = --no-excel (parquet only)
 CSV=1                    # 1 = also write .csv (default)
-PULL_PREVIOUS=1          # 1 = download other UPCs' dlm_kpi parquet so display_defect_id counters continue
+PULL_PREVIOUS=1          # 1 = download other UPCs' dlm_kpi / dlm_kpi_new parquet so display_defect_id counters continue
 WORK_DIR="${WORK_DIR:-$HOME/nsv_work}"
 CODE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="${PYTHON:-$CODE_DIR/.venv/bin/python}"
+[[ -x "$PYTHON" ]] || PYTHON="$CODE_DIR/../.venv/bin/python"     # one venv at the repo root
 
 # ── arguments ────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -60,6 +61,7 @@ PART="zone=${ZONE}/phase=${PHASE}/cycle=${CYCLE}/${UPC}"
 S3_IN="s3://${BUCKET}/${BRONZE_PREFIX}/${PART}/"
 S3_OUT_ROOT="s3://${BUCKET}/${SILVER_PREFIX}"
 S3_OUT="${S3_OUT_ROOT}/${PART}/"
+export NSV_BRONZE_S3_ROOT="s3://${BUCKET}/${BRONZE_PREFIX}"     # config.BRONZE_S3_ROOT → dlm_threshold_mapping.deliverable_path
 
 LOCAL_IN="${WORK_DIR}/bronze/nsv/${PART}"      # keeps zone=/phase=/cycle= in the path → main.py reads them from it
 LOCAL_OUT_ROOT="${WORK_DIR}/silver"
@@ -105,10 +107,13 @@ fi
 
 # ── 4. other UPCs already in nsv-silver (only for the display_defect_id counter) ─
 if [[ "$PULL_PREVIOUS" == 1 ]]; then
-  echo -e "\n[2/4] Fetching existing silver dlm_kpi tables of other UPCs (display_defect_id counter) …"
+  echo -e "\n[2/4] Fetching existing silver dlm_kpi / dlm_kpi_new tables of other UPCs (display_defect_id counter) …"
   aws s3 sync "${S3_OUT_ROOT}/" "${LOCAL_OUT_ROOT}/" --region "$REGION" --only-show-errors \
       --exclude "*" --include "*/dlm_kpi/master_*.parquet" \
+      --include "*/dlm_kpi_new/*.parquet" \
       --exclude "*/dlm_kpi/master_chainage.parquet" --exclude "*/dlm_kpi/master_reporting_interval.parquet" \
+      --exclude "*/dlm_kpi_new/master_chainage.parquet" --exclude "*/dlm_kpi_new/master_reporting_interval.parquet" \
+      --exclude "*/dlm_kpi_new/dlm_threshold_mapping.parquet" \
       --exclude "${PART}/*" || echo "  WARNING: could not read ${S3_OUT_ROOT} — counter starts at 1"
 else
   echo -e "\n[2/4] Skipped fetching other UPCs (--no-previous)"
