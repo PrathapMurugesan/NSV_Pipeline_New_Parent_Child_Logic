@@ -46,7 +46,7 @@ command -v aws >/dev/null || { echo "ERROR: aws CLI not installed"; exit 2; }
 
 UPC_DASH="$(echo "$UPC" | tr '/_ ' '---' | tr '[:lower:]' '[:upper:]')"
 PART="zone=${ZONE}/phase=${PHASE}/cycle=${CYCLE}/${UPC_DASH}"
-S3_IN="s3://${BUCKET}/${SILVER_PREFIX}/${PART}/dlm_kpi/"
+S3_IN="s3://${BUCKET}/${SILVER_PREFIX}/${PART}/dlm_kpi_new/"
 S3_OUT="s3://${BUCKET}/${GOLD_PREFIX}/${PART}/"
 WORK="${WORK_DIR}/gold/${PART}"
 LOCAL_IN="${WORK}/input"
