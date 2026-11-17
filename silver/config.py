@@ -24,6 +24,7 @@ WRITE_CSV     = True
 PARENT_LENGTH_M = 1000   # 1 km parent table
 CHILD_100M      = 100
 CHILD_10M       = 10
+DQ_ROUND_DECIMALS = 2
 
 # parent_id / parent_start_chainage / parent_end_chainage block per level — as the DLM notebook:
 #   every level (10 m incl. cracking and pothole, 100 m, 1 km) → its 1 km block: {UPC}_{lane}_{km start}_{km end}
