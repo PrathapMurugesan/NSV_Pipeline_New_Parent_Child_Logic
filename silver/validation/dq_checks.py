@@ -52,6 +52,17 @@ VALUE_CHECKS = {'rutting': ('rut depth', 'rut depth', 'metric_value'),
                 'cracking': ('cracking lane area', 'crack area', 'metric_value')}
 
 
+def r2(s):
+    f = 10 ** config.DQ_ROUND_DECIMALS
+    return np.floor(num(s) * f + 0.5 + 1e-9) / f
+
+
+
+_HALF_STEP = 0.5 / 10 ** config.DQ_ROUND_DECIMALS
+
+
+
+
 def _load_outputs(prj, tables):
     out = {}
     for t in NEEDED:
