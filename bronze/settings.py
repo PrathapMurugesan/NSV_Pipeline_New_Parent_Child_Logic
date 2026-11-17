@@ -39,14 +39,14 @@ SCHEMAS_DIR = PROJECT_ROOT / "schemas"          # expected headers (part of the 
 #    {upc} is the UPC as used in folder names: '/' replaced by '-'  (N/08004/03001/HR -> N-08004-03001-HR)
 #
 #    raw:     nsv/zone=A/phase=1/cycle=1/N-08004-03001-HR/d2/<files as downloaded>
-#    bronze:  bronze/nsv/zone=A/phase=1/cycle=1/N-08004-03001-HR/d2/run=20261020_101500/<extracted files>
+#    bronze:  zone=A/phase=1/cycle=1/N-08004-03001-HR/d2/run=20261020_101500/<extracted files>
 #
 #    If your real folders look different (e.g. "upc=N-08..." or "Deliverable 2"), change only these lines.
 # =============================================================================
 RAW_LAYOUT = "nsv/zone={zone}/phase={phase}/cycle={cycle}/{upc}/{deliverable}"
-BRONZE_LAYOUT = "bronze/nsv/zone={zone}/phase={phase}/cycle={cycle}/{upc}/{deliverable}"
+BRONZE_LAYOUT = "zone={zone}/phase={phase}/cycle={cycle}/{upc}/{deliverable}"
 RUN_FOLDER = "run={run_id}"                      # one folder per extraction run, inside the bronze folder
-BATCH_FOLDER = "bronze/nsv/_batches"             # summary of every loop over several surveys
+BATCH_FOLDER = "_batches"                        # summary of every loop over several surveys
 MASTER_FOLDER = "master"                         # master tables over all UPCs (master/reporting_intervals.parquet)
 
 ZONES = ["A", "B", "C", "D", "E"]                # allowed values - other folders are reported and ignored
