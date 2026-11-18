@@ -232,12 +232,8 @@ def _value_and_breach_checks(prj, tables, summary, mism):
                     sb = _silver_bins(prj, tables, defect, std, lane, g)
                     j = ref.join(sb, on='bin', how='left')
                     
-                    if defect == 'roughness':
-                      diff = (j['d2'] - num(j['silver'])).abs()
-                      ok = diff <= config.DQ_TOLERANCE_BY_DEFECT.get(defect, config.DQ_TOLERANCE)
-                    else:
-                      diff = (r2(j['d2']) - r2(j['silver'])).abs()
-                      ok = diff < _HALF_STEP
+                    diff = (r2(j['d2']) - r2(j['silver'])).abs()
+                    ok = diff < _HALF_STEP
                       
                     summary.append(_row('value', std, defect, lane, level, len(j), int(ok.sum()), skipped))
                     bad = j[~ok]
